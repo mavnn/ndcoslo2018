@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using FsCheck;
 using FsCheck.Xunit;
@@ -41,12 +42,15 @@ namespace Rendering.CSharp.Tests
         }
 
         [Property(Arbitrary = new[] { typeof(Generator) })]
-        public void DoesNotChangeWithNoTags(TaglessString template,
+        public bool DoesNotChangeWithNoTags(TaglessString template,
                                             IDictionary<string, string> model)
         {
             var result = renderText(model, template.Value);
-            Assert.Equal(Result.NewOk(template.Value), result);
-
+            
+            if(result.IsOk)
+                return result.ResultValue == template.Value;
+            else
+                throw new Exception(result.ErrorValue.ToString());
         }
     }
 }
