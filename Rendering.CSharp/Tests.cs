@@ -1,7 +1,4 @@
-using System;
 using System.Collections.Generic;
-using FsCheck;
-using FsCheck.Xunit;
 using Xunit;
 using static Rendering.Implementation;
 using Result =
@@ -31,14 +28,6 @@ namespace Rendering.CSharp.Tests
             };
             var result = renderText(model, template);
             Assert.Equal(Result.NewOk("a REPLACED"), result);
-        }
-
-        [Property]
-        public bool DoesNotThrow(string template,
-                                 IDictionary<string, string> model)
-        {
-            var result = renderText(model, template);
-            return true;
         }
     }
 }
