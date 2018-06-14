@@ -1,0 +1,8 @@
+packages/
+paket-files/
+bin/
+obj/
+*.userprefs
+*.suo
+BenchmarkDotNet.Artifacts/
+nupkgs

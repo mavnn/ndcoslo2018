@@ -1,0 +1,915 @@
+* Starter
+
+#+BEGIN_SRC fsharp
+module Rendering.Implementation
+
+open System.Collections.Generic
+open System.Text.RegularExpressions
+
+let renderText model content =
+    let fold str (key, value : string) =
+        let regex = Regex(sprintf """\{\{\s?%s\s?\}\}""" key)
+        regex.Replace(str, value)
+    model
+    |> Seq.map (fun (kv : KeyValuePair<_,_>) -> kv.Key, kv.Value)
+    |> Seq.fold fold content
+#+END_SRC
+
+* Starting C#
+
+#+BEGIN_SRC csharp
+using System.Collections.Generic;
+using Expecto;
+using FsCheck;
+using static Expecto.CSharp.Runner;
+using static Rendering.Implementation;
+
+namespace Rendering.CSharp.Tests
+{
+    public class Tests
+    {
+         [Tests]
+         public static Test CSharpTests =
+             TestList("C# Tests", new Test [] {
+                 TestCase("String without tag doesn't change", () => {
+                     var template = "No tags";
+                     var model = new Dictionary<string, string>();
+                     var result = renderText(model, template);
+                     Expect.equal(result, template, "Templates without tags don't change.");
+                 }),
+                 TestCase("String with a tag is replaced", () => {
+                     var template = "a {{ TAG }}";
+                     var model = new Dictionary<string, string>{
+                         { "TAG", "REPLACED" }
+                     };
+                     var result = renderText(model, template);
+                     Expect.equal(result, "a REPLACED", "Templates with tags should change.");
+
+                 })
+             });
+
+    }
+}
+#+END_SRC
+
+* First property:
+
+#+BEGIN_SRC csharp
+                TestCase("Doesn't throw", () => {
+                        Prop.ForAll<string, IDictionary<string, string>>((template, model) => {
+                                var result = renderText(model, template);
+                                return result == template;
+                            }).QuickCheckThrowOnFailure();
+                })
+#+END_SRC
+
+
+* Add result type
+
+#+BEGIN_SRC fsharp
+module Rendering.Implementation
+
+open System.Collections.Generic
+open System.Text.RegularExpressions
+
+type RenderingError =
+    | NullModel
+    | NullContent
+
+let private renderTextLogic model content =
+    let fold str (key, value : string) =
+        let regex = Regex(sprintf """\{\{\s?%s\s?\}\}""" key)
+        regex.Replace(str, value)
+    model
+    |> Seq.map (fun (kv : KeyValuePair<_,_>) -> kv.Key, kv.Value)
+    |> Seq.fold fold content
+
+
+let renderText model content =
+    match model, content with
+    | m, _ when isNull m ->
+        Error NullModel
+    | _, c when isNull c ->
+        Error NullContent
+    | _ ->
+        renderTextLogic model content
+        |> Ok
+#+END_SRC
+
+#+BEGIN_SRC csharp
+using System.Collections.Generic;
+using Expecto;
+using FsCheck;
+using static Expecto.CSharp.Runner;
+using static Rendering.Implementation;
+using Result = Microsoft.FSharp.Core.FSharpResult<string, Rendering.Implementation.RenderingError>;
+
+namespace Rendering.CSharp.Tests
+{
+    public class Tests
+    {
+         [Tests]
+         public static Test CSharpTests =
+            TestList("C# Tests", new Test [] {
+                TestCase("String without tag doesn't change", () => {
+                    var template = "No tags";
+                    var model = new Dictionary<string, string>();
+                    var result = renderText(model, template);
+                    Expect.equal(result, Result.NewOk(template), "Templates without tags don't change.");
+                }),
+                TestCase("String with a tag is replaced", () => {
+                    var template = "a {{ TAG }}";
+                    var model = new Dictionary<string, string>{
+                        { "TAG", "REPLACED" }
+                    };
+                    var result = renderText(model, template);
+                    Expect.equal(result, Result.NewOk("a REPLACED"), "Templates with tags should change.");
+
+                }),
+                TestCase("Doesn't throw", () => {
+                        Prop.ForAll<string, IDictionary<string, string>>((template, model) => {
+                                var result = renderText(model, template);
+                                return true;
+                            }).QuickCheckThrowOnFailure();
+                })
+            });
+    }
+}
+#+END_SRC
+
+* Deal with null values in model
+
+#+BEGIN_SRC fsharp
+module Rendering.Implementation
+
+open System.Collections.Generic
+open System.Text.RegularExpressions
+
+type RenderingError =
+    | NullModel
+    | NullContent
+    | NullWithinModel
+
+let private renderTextLogic model content =
+    let fold str (key, value : string) =
+        let regex = Regex(sprintf """\{\{\s?%s\s?\}\}""" key)
+        regex.Replace(str, value)
+    model
+    |> Seq.map (fun (kv : KeyValuePair<_,_>) -> kv.Key, kv.Value)
+    |> Seq.fold fold content
+
+let private isNullWithinModel model =
+    model
+    |> Seq.exists (fun (kv : KeyValuePair<_,_>) -> isNull kv.Key || isNull kv.Value)
+
+let renderText model content =
+    match model, content with
+    | m, _ when isNull m ->
+        Error NullModel
+    | _, c when isNull c ->
+        Error NullContent
+    | m, _ when isNullWithinModel m ->
+        Error NullWithinModel
+    | _ ->
+        renderTextLogic model content
+        |> Ok
+#+END_SRC
+
+* Deal with invalid keys
+
+StdGen (1636108967,296457718) <- creates a key with an open bracket
+
+#+BEGIN_SRC fsharp
+module Rendering.Implementation
+
+open System
+open System.Collections.Generic
+open System.Text.RegularExpressions
+
+type RenderingError =
+    | NullModel
+    | NullContent
+    | NullWithinModel
+    | InvalidKeySupplied
+
+let private renderTextLogic model content =
+    let fold str (key, value : string) =
+        let regex = Regex(sprintf """\{\{\s?%s\s?\}\}""" key)
+        regex.Replace(str, value)
+    model
+    |> Seq.map (fun (kv : KeyValuePair<_,_>) -> kv.Key, kv.Value)
+    |> Seq.fold fold content
+
+let private isNullWithinModel model =
+    model
+    |> Seq.exists (fun (kv : KeyValuePair<_,_>) -> isNull kv.Key || isNull kv.Value)
+
+let private allKeysValid model =
+    let isValidKey k =
+        not (String.IsNullOrWhiteSpace k)
+        && Char.IsLetter k.[0]
+        && (k.[1..] |> Seq.forall Char.IsLetterOrDigit)
+    model
+    |> Seq.forall (fun (kv : KeyValuePair<_,_>) -> isValidKey kv.Key)
+
+let renderText model content =
+    match model, content with
+    | m, _ when isNull m ->
+        Error NullModel
+    | _, c when isNull c ->
+        Error NullContent
+    | m, _ when isNullWithinModel m ->
+        Error NullWithinModel
+    | m, _ when not (allKeysValid m) ->
+        Error InvalidKeySupplied
+    | _ ->
+        renderTextLogic model content
+        |> Ok
+#+END_SRC
+
+* Great! Doesn't throw
+
+Now - actual check of some kind. Enough C#, let's try out F# properties
+
+#+BEGIN_SRC fsharp
+module Tests
+
+open Expecto
+open Expecto.ExpectoFsCheck
+open Rendering.Implementation
+
+[<Tests>]
+let tests =
+  testList "samples" []
+#+END_SRC
+
+Becomes:
+
+#+BEGIN_SRC fsharp
+module Tests
+
+open Expecto
+open Expecto.ExpectoFsCheck
+open Rendering.Implementation
+
+[<Tests>]
+let tests =
+    testList "samples" [
+        testProperty "Doesn't throw reprise" <| fun model content ->
+            let result = renderText model content
+            true
+    ]
+#+END_SRC
+
+Except! model is taken to be as generic as possible (IEnumerable<KeyValuePair<_,_>>) and FsCheck doesn't know how to create one of those (in C#, we specified IDictionary).
+
+Let's tell FsCheck how:
+
+#+BEGIN_SRC fsharp
+module Tests
+
+open Expecto
+open Expecto.ExpectoFsCheck
+open FsCheck
+open Rendering.Implementation
+
+type Dict<'a, 'b> = System.Collections.Generic.Dictionary<'a, 'b>
+type IDict<'a, 'b> = System.Collections.Generic.IDictionary<'a, 'b>
+type KVP<'a, 'b> = System.Collections.Generic.KeyValuePair<'a, 'b>
+
+type Generators() =
+    static member KeyValuePairSeq() : Arbitrary<KVP<string, string> seq> =
+        Arb.from<IDict<_,_>>
+        |> Arb.convert
+            (fun m -> m :> seq<KVP<_, _>>)
+            (fun kvps -> Dict(kvps) :> IDict<_, _>)
+
+let checkConfig =
+    { FsCheckConfig.defaultConfig with arbitrary = [typeof<Generators>] }
+
+[<Tests>]
+let tests =
+    testList "samples" [
+        testPropertyWithConfig checkConfig "Doesn't throw reprise" <| fun model content ->
+            let result = renderText model content
+            true
+    ]
+#+END_SRC
+
+* Adding generators with logic
+
+#+BEGIN_SRC fsharp
+module Tests
+
+open Expecto
+open Expecto.ExpectoFsCheck
+open FsCheck
+open Rendering.Implementation
+
+type Dict<'a, 'b> = System.Collections.Generic.Dictionary<'a, 'b>
+type IDict<'a, 'b> = System.Collections.Generic.IDictionary<'a, 'b>
+type KVP<'a, 'b> = System.Collections.Generic.KeyValuePair<'a, 'b>
+
+type TaglessString(arbitraryString) =
+    let rec removeOpenings (str : string) =
+        let reduced = str.Replace("{{", "{")
+        if reduced = str then
+            str
+        else
+            removeOpenings reduced
+    member __.Value =
+        removeOpenings arbitraryString
+    override x.ToString() =
+        "Tagless: " + x.Value
+
+type Generators() =
+    static member KeyValuePairSeq() : Arbitrary<KVP<string, string> seq> =
+        Arb.from<IDict<_,_>>
+        |> Arb.convert
+            (fun m -> m :> seq<KVP<_, _>>)
+            (fun kvps -> Dict(kvps) :> IDict<_, _>)
+    static member TaglessString() : Arbitrary<TaglessString> =
+        Arb.from<NonNull<string>>
+        |> Arb.convert
+            (fun nn -> TaglessString(nn.Get))
+            (fun ts -> NonNull ts.Value)
+
+let checkConfig =
+    { FsCheckConfig.defaultConfig with arbitrary = [typeof<Generators>] }
+
+[<Tests>]
+let tests =
+    testList "samples" [
+        testPropertyWithConfig checkConfig "Doesn't throw reprise" <| fun model content ->
+            let result = renderText model content
+            true
+        testPropertyWithConfig checkConfig "Tagless strings don't change" <| fun model (ts : TaglessString) ->
+            let result = renderText model ts.Value
+            match result with
+            | Ok rendered ->
+                ts.Value = rendered
+            | Error err ->
+                false
+    ]
+#+END_SRC
+
+* Looks great - but it fails!
+
+Why? Let's find out with labels.
+
+
+#+BEGIN_SRC fsharp
+module Tests
+
+open Expecto
+open Expecto.ExpectoFsCheck
+open FsCheck
+open Rendering.Implementation
+
+type Dict<'a, 'b> = System.Collections.Generic.Dictionary<'a, 'b>
+type IDict<'a, 'b> = System.Collections.Generic.IDictionary<'a, 'b>
+type KVP<'a, 'b> = System.Collections.Generic.KeyValuePair<'a, 'b>
+
+type TaglessString(arbitraryString) =
+    let rec removeOpenings (str : string) =
+        let reduced = str.Replace("{{", "{")
+        if reduced = str then
+            str
+        else
+            removeOpenings reduced
+    member __.Value =
+        removeOpenings arbitraryString
+    override x.ToString() =
+        "Tagless: " + x.Value
+
+type Generators() =
+    static member KeyValuePairSeq() : Arbitrary<KVP<string, string> seq> =
+        Arb.from<IDict<_,_>>
+        |> Arb.convert
+            (fun m -> m :> seq<KVP<_, _>>)
+            (fun kvps -> Dict(kvps) :> IDict<_, _>)
+    static member TaglessString() : Arbitrary<TaglessString> =
+        Arb.from<NonNull<string>>
+        |> Arb.convert
+            (fun nn -> TaglessString(nn.Get))
+            (fun ts -> NonNull ts.Value)
+
+let checkConfig =
+    { FsCheckConfig.defaultConfig with arbitrary = [typeof<Generators>] }
+
+[<Tests>]
+let tests =
+    testList "samples" [
+        testPropertyWithConfig checkConfig "Doesn't throw reprise" <| fun model content ->
+            let result = renderText model content
+            true
+        testPropertyWithConfig checkConfig "Tagless strings don't change" <| fun model (ts : TaglessString) ->
+            let result = renderText model ts.Value
+            match result with
+            | Ok rendered ->
+                ts.Value = rendered |@ "Invalid change"
+            | Error err ->
+                false |@ sprintf "Rendering error: %A" err
+    ]
+#+END_SRC
+
+* Invalid model being generated...
+
+Better create a Key generator!
+
+#+BEGIN_SRC fsharp
+module Tests
+
+open System
+open Expecto
+open Expecto.ExpectoFsCheck
+open FsCheck
+open Rendering.Implementation
+
+type Dict<'a, 'b> = System.Collections.Generic.Dictionary<'a, 'b>
+type IDict<'a, 'b> = System.Collections.Generic.IDictionary<'a, 'b>
+type KVP<'a, 'b> = System.Collections.Generic.KeyValuePair<'a, 'b>
+
+type TaglessString(arbitraryString) =
+    let rec removeOpenings (str : string) =
+        let reduced = str.Replace("{{", "{")
+        if reduced = str then
+            str
+        else
+            removeOpenings reduced
+    member __.Value =
+        removeOpenings arbitraryString
+    override x.ToString() =
+        "Tagless: " + x.Value
+
+type ValidKey = ValidKey of string
+    with
+        member x.Value =
+            match x with
+            | ValidKey v -> v
+        static member Openers =
+            List.concat [['a'..'z'];['A'..'Z']]
+        static member Remaining =
+            List.concat [ValidKey.Openers;['0'..'9']]
+
+type Generators() =
+    static member KeyValuePairSeq() : Arbitrary<KVP<string, string> seq> =
+        Arb.from<IDict<_,_>>
+        |> Arb.convert
+            (fun m ->
+                m :> seq<KVP<ValidKey, NonNull<string>>>
+                |> Seq.map (fun kv -> KVP(kv.Key.Value, kv.Value.Get)))
+            (fun kvps ->
+                kvps
+                |> Seq.map (fun kv -> KVP(ValidKey kv.Key, NonNull kv.Value))
+                |> Dict
+                :> IDict<_, _>)
+    static member TaglessString() : Arbitrary<TaglessString> =
+        Arb.from<NonNull<string>>
+        |> Arb.convert
+            (fun nn -> TaglessString(nn.Get))
+            (fun ts -> NonNull ts.Value)
+    static member ValidKey() : Arbitrary<ValidKey> =
+        gen {
+            let! opener = Gen.elements ValidKey.Openers
+            let! rest = Gen.arrayOf (Gen.elements ValidKey.Remaining)
+            let allChars = Array.concat [[|opener|]; rest]
+            return allChars |> String |> ValidKey
+        } |> Arb.fromGen
+
+let checkConfig =
+    { FsCheckConfig.defaultConfig with arbitrary = [typeof<Generators>] }
+
+[<Tests>]
+let tests =
+    testList "samples" [
+        testPropertyWithConfig checkConfig "Doesn't throw reprise" <| fun model content ->
+            let result = renderText model content
+            true
+        testPropertyWithConfig checkConfig "Tagless strings don't change" <| fun model (ts : TaglessString) ->
+            let result = renderText model ts.Value
+            match result with
+            | Ok rendered ->
+                ts.Value = rendered |@ "Invalid change"
+            | Error err ->
+                false |@ sprintf "Rendering error: %A" err
+    ]
+#+END_SRC
+
+* Passing test! Now what about templates with Tags?
+
+#+BEGIN_SRC fsharp
+module Tests
+
+open System
+open Expecto
+open Expecto.ExpectoFsCheck
+open FsCheck
+open Rendering.Implementation
+
+type Dict<'a, 'b> = System.Collections.Generic.Dictionary<'a, 'b>
+type IDict<'a, 'b> = System.Collections.Generic.IDictionary<'a, 'b>
+type KVP<'a, 'b> = System.Collections.Generic.KeyValuePair<'a, 'b>
+
+type TaglessString(arbitraryString) =
+    let rec removeOpenings (str : string) =
+        let reduced = str.Replace("{{", "{")
+        if reduced = str then
+            str
+        else
+            removeOpenings reduced
+    member __.Value =
+        removeOpenings arbitraryString
+    override x.ToString() =
+        "Tagless: " + x.Value
+
+type ValidKey = ValidKey of string
+    with
+        member x.Value =
+            match x with
+            | ValidKey v -> v
+        static member Openers =
+            List.concat [['a'..'z'];['A'..'Z']]
+        static member Remaining =
+            List.concat [ValidKey.Openers;['0'..'9']]
+
+type TemplateSituation =
+    { Model : IDict<string, string>
+      Template : string
+      Expected : string }
+
+type Generators() =
+    static member KeyValuePairSeq() : Arbitrary<KVP<string, string> seq> =
+        Arb.from<IDict<_,_>>
+        |> Arb.convert
+            (fun m ->
+                m :> seq<KVP<ValidKey, NonNull<string>>>
+                |> Seq.map (fun kv -> KVP(kv.Key.Value, kv.Value.Get)))
+            (fun kvps ->
+                kvps
+                |> Seq.map (fun kv -> KVP(ValidKey kv.Key, NonNull kv.Value))
+                |> Dict
+                :> IDict<_, _>)
+    static member TaglessString() : Arbitrary<TaglessString> =
+        Arb.from<NonNull<string>>
+        |> Arb.convert
+            (fun nn -> TaglessString(nn.Get))
+            (fun ts -> NonNull ts.Value)
+    static member ValidKey() : Arbitrary<ValidKey> =
+        gen {
+            let! opener = Gen.elements ValidKey.Openers
+            let! rest = Gen.arrayOf (Gen.elements ValidKey.Remaining)
+            let allChars = Array.concat [[|opener|]; rest]
+            return allChars |> String |> ValidKey
+        } |> Arb.fromGen
+    static member TemplateSituation() : Arbitrary<TemplateSituation> =
+        gen {
+            let! (modelData : KVP<string, string> seq) = Arb.generate
+            let model = Dict(modelData)
+            let taglessSection =
+                gen {
+                    let! (ts : TaglessString) = Arb.generate
+                    return ts.Value, ts.Value
+                }
+            let taggedSection =
+                gen {
+                    if Seq.isEmpty modelData then
+                        return "", ""
+                    else
+                        let! kv = Gen.elements modelData
+                        return "{{" + kv.Key + "}}", kv.Value
+                }
+            let! sections =
+                Gen.listOf (Gen.oneof [taglessSection;taggedSection])
+            let before =
+                sections
+                |> List.map fst
+                |> String.concat ""
+            let after =
+                sections
+                |> List.map snd
+                |> String.concat ""
+            return
+                { Model = model
+                  Template = before
+                  Expected = after }
+        } |> Arb.fromGen
+
+let checkConfig =
+    { FsCheckConfig.defaultConfig with arbitrary = [typeof<Generators>] }
+
+[<Tests>]
+let tests =
+    testList "samples" [
+        testPropertyWithConfig checkConfig "Doesn't throw reprise" <| fun model content ->
+            let result = renderText model content
+            true
+        testPropertyWithConfig checkConfig "Tagless strings don't change" <| fun model (ts : TaglessString) ->
+            let result = renderText model ts.Value
+            match result with
+            | Ok rendered ->
+                ts.Value = rendered |@ "Invalid change"
+            | Error err ->
+                false |@ sprintf "Rendering error: %A" err
+        testPropertyWithConfig checkConfig "Tagged string do change" <| fun templateSituation ->
+            let result = renderText templateSituation.Model templateSituation.Template
+            match result with
+            | Ok rendered ->
+                rendered = templateSituation.Expected |@ "Invalid change"
+            | Error err ->
+                false |@ sprintf "Rendering error: %A" err
+    ]
+#+END_SRC
+
+* An intermittently failing test with hard to spot result...
+
+Fall back to the test frameworks comparison tool
+
+#+BEGIN_SRC fsharp
+module Tests
+
+open System
+open Expecto
+open Expecto.ExpectoFsCheck
+open FsCheck
+open Rendering.Implementation
+
+type Dict<'a, 'b> = System.Collections.Generic.Dictionary<'a, 'b>
+type IDict<'a, 'b> = System.Collections.Generic.IDictionary<'a, 'b>
+type KVP<'a, 'b> = System.Collections.Generic.KeyValuePair<'a, 'b>
+
+type TaglessString(arbitraryString) =
+    let rec removeOpenings (str : string) =
+        let reduced = str.Replace("{{", "{")
+        if reduced = str then
+            str
+        else
+            removeOpenings reduced
+    member __.Value =
+        removeOpenings arbitraryString
+    override x.ToString() =
+        "Tagless: " + x.Value
+
+type ValidKey = ValidKey of string
+    with
+        member x.Value =
+            match x with
+            | ValidKey v -> v
+        static member Openers =
+            List.concat [['a'..'z'];['A'..'Z']]
+        static member Remaining =
+            List.concat [ValidKey.Openers;['0'..'9']]
+
+type TemplateSituation =
+    { Model : IDict<string, string>
+      Template : string
+      Expected : string }
+
+type Generators() =
+    static member KeyValuePairSeq() : Arbitrary<KVP<string, string> seq> =
+        Arb.from<IDict<_,_>>
+        |> Arb.convert
+            (fun m ->
+                m :> seq<KVP<ValidKey, NonNull<string>>>
+                |> Seq.map (fun kv -> KVP(kv.Key.Value, kv.Value.Get)))
+            (fun kvps ->
+                kvps
+                |> Seq.map (fun kv -> KVP(ValidKey kv.Key, NonNull kv.Value))
+                |> Dict
+                :> IDict<_, _>)
+    static member TaglessString() : Arbitrary<TaglessString> =
+        Arb.from<NonNull<string>>
+        |> Arb.convert
+            (fun nn -> TaglessString(nn.Get))
+            (fun ts -> NonNull ts.Value)
+    static member ValidKey() : Arbitrary<ValidKey> =
+        gen {
+            let! opener = Gen.elements ValidKey.Openers
+            let! rest = Gen.arrayOf (Gen.elements ValidKey.Remaining)
+            let allChars = Array.concat [[|opener|]; rest]
+            return allChars |> String |> ValidKey
+        } |> Arb.fromGen
+    static member TemplateSituation() : Arbitrary<TemplateSituation> =
+        gen {
+            let! (modelData : KVP<string, string> seq) = Arb.generate
+            let model = Dict(modelData)
+            let taglessSection =
+                gen {
+                    let! (ts : TaglessString) = Arb.generate
+                    return ts.Value, ts.Value
+                }
+            let taggedSection =
+                gen {
+                    if Seq.isEmpty modelData then
+                        return "", ""
+                    else
+                        let! kv = Gen.elements modelData
+                        return "{{" + kv.Key + "}}", kv.Value
+                }
+            let! sections =
+                Gen.listOf (Gen.oneof [taglessSection;taggedSection])
+            let before =
+                sections
+                |> List.map fst
+                |> String.concat ""
+            let after =
+                sections
+                |> List.map snd
+                |> String.concat ""
+            return
+                { Model = model
+                  Template = before
+                  Expected = after }
+        } |> Arb.fromGen
+
+let checkConfig =
+    { FsCheckConfig.defaultConfig with arbitrary = [typeof<Generators>] }
+
+[<Tests>]
+let tests =
+    testList "samples" [
+        testPropertyWithConfig checkConfig "Doesn't throw reprise" <| fun model content ->
+            let result = renderText model content
+            true
+        testPropertyWithConfig checkConfig "Tagless strings don't change" <| fun model (ts : TaglessString) ->
+            let result = renderText model ts.Value
+            match result with
+            | Ok rendered ->
+                ts.Value = rendered |@ "Invalid change"
+            | Error err ->
+                false |@ sprintf "Rendering error: %A" err
+        testPropertyWithConfig checkConfig "Tagged string do change" <| fun templateSituation ->
+            let result = renderText templateSituation.Model templateSituation.Template
+            match result with
+            | Ok rendered ->
+                Expect.equal rendered templateSituation.Expected "Invalid change"
+            | Error err ->
+                failtestf "Rendering error: %A" err
+    ]
+#+END_SRC
+
+String does not match at position 1532. Expected char: '$', but got '{'.
+
+* Hit the limits of our simple regex based replace; we need an actual parser
+
+#+BEGIN_SRC fsharp
+module Rendering.Implementation
+
+open System
+open System.Collections.Generic
+open System.Text.RegularExpressions
+
+type RenderingError =
+    | NullModel
+    | NullContent
+    | NullWithinModel
+    | InvalidKeySupplied
+    | MalformedTag of int
+    | MissingKey
+
+let private peek str i =
+    if i >= 0 && i < String.length str then
+        Some str.[i]
+    else
+        None
+
+let private consumeIf f str i =
+    match peek str i with
+    | Some c when f c -> (Some c), i + 1
+    | _ -> None, i
+
+let rec private skipWhiteSpace (str : string) index =
+    match consumeIf Char.IsWhiteSpace str index with
+    | _, newIndex -> newIndex
+
+let rec private readRestIdentifier (str : string) index idChars =
+    match consumeIf Char.IsLetterOrDigit str index with
+    | Some c, i ->
+        readRestIdentifier str i (Array.append idChars [| c |])
+    | None, i ->
+        String idChars, i
+
+let private readIdentifier (model : IDictionary<string, string>) (str : string) index =
+    match consumeIf Char.IsLetter str index with
+    | Some c, i ->
+        let key, newIndex = readRestIdentifier str i [| c |]
+        match model.TryGetValue key with
+        | true, v -> Ok (v, newIndex)
+        | false, _ -> Error MissingKey
+    | None, _ ->
+        Error <| MalformedTag index
+
+let private readTag model str index =
+    let index = skipWhiteSpace str index
+    match readIdentifier model str index with
+    | Ok (result, index) ->
+        let index = skipWhiteSpace str index
+        match peek str index, peek str (index + 1) with
+        | Some '}', Some '}' ->
+            Ok (result, index + 2)
+        | _ ->
+            Error <| MalformedTag index
+    | Error err ->
+        Error err
+
+let private tagNext str index =
+    match peek str index, peek str (index + 1) with
+    | Some '{', Some '{' ->
+        true, index + 2
+    | _ ->
+        false, index
+
+let rec private readNonTag str index (chars : char []) =
+    match tagNext str index with
+    | true, _ ->
+        String chars, index
+    | false, i ->
+        match consumeIf (fun _ -> true) str i with
+        | Some c, newIndex ->
+            readNonTag str newIndex (Array.append chars [| c |])
+        | None, newIndex ->
+            String chars, newIndex
+
+let rec private buildSections model str index sections =
+    match tagNext str index with
+    | true, i ->
+        match readTag model str (index + 2) with
+        | Ok (result, index) ->
+            buildSections model str index (result::sections)
+        | Error err ->
+            Error err
+    | false, i ->
+        if String.length str = index then
+            sections
+            |> List.rev
+            |> String.concat ""
+            |> Ok
+        else
+            let result, index = readNonTag str index [||]
+            buildSections model str index (result::sections)
+
+let private renderTextLogic (model : KeyValuePair<string, string> seq) content =
+    if String.length content = 0 then
+        Ok ""
+    else
+        let d = dict (model |> Seq.map (fun kv -> kv.Key, kv.Value))
+        buildSections d content 0 []
+
+let private isNullWithinModel model =
+    model
+    |> Seq.exists (fun (kv : KeyValuePair<_,_>) -> isNull kv.Key || isNull kv.Value)
+
+let private allKeysValid model =
+    let isValidKey k =
+        not (String.IsNullOrWhiteSpace k)
+        && Char.IsLetter k.[0]
+        && (k.[1..] |> Seq.forall Char.IsLetterOrDigit)
+    model
+    |> Seq.forall (fun (kv : KeyValuePair<_,_>) -> isValidKey kv.Key)
+
+let renderText model content =
+    match model, content with
+    | m, _ when isNull m ->
+        Error NullModel
+    | _, c when isNull c ->
+        Error NullContent
+    | m, _ when isNullWithinModel m ->
+        Error NullWithinModel
+    | m, _ when not (allKeysValid m) ->
+        Error InvalidKeySupplied
+    | _ ->
+        renderTextLogic model content
+#+END_SRC
+
+* Argh - what now?!
+
+This time round, it's our test which is wrong. If a non tag string ends in an {, we can generate invalid templates.
+
+#+BEGIN_SRC fsharp
+type TaglessString(arbitraryString) =
+    let rec removeOpenings (str : string) =
+        let reduced = str.Replace("{{", "{")
+        if reduced = str then
+            str
+        else
+            removeOpenings reduced
+    let rec removeClosingTag (str : string) =
+        let reduced =
+            if str.EndsWith "{" then
+                if str.Length = 1 then
+                    "a"
+                else
+                    str.Substring(0, str.Length - 1)
+            else
+                str
+        if reduced = str then
+            str
+        else
+            removeClosingTag reduced
+    member __.Value =
+        arbitraryString
+        |> removeOpenings
+        |> removeClosingTag
+    override x.ToString() =
+        "Tagless: " + x.Value
+#+END_SRC

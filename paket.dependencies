@@ -1,0 +1,8 @@
+source https://api.nuget.org/v3/index.json
+
+nuget Expecto.FsCheck >= 8.0
+nuget FSharp.Core >= 4.0
+nuget xunit
+nuget FsCheck.Xunit
+nuget xunit.runner.visualstudio
+nuget Microsoft.NET.Test.Sdk
