@@ -40,17 +40,5 @@ namespace Rendering.CSharp.Tests
             var result = renderText(model, template);
             return true;
         }
-
-        [Property(Arbitrary = new[] { typeof(Generator) })]
-        public bool DoesNotChangeWithNoTags(TaglessString template,
-                                            IDictionary<string, string> model)
-        {
-            var result = renderText(model, template.Value);
-            
-            if(result.IsOk)
-                return result.ResultValue == template.Value;
-            else
-                throw new Exception(result.ErrorValue.ToString());
-        }
     }
 }
