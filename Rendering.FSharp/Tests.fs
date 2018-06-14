@@ -26,7 +26,7 @@ type TaglessString(arbitraryString) =
                 v + "a"
             else
                 v
-                    
+
     override x.ToString() =
         "Tagless: " + x.Value
 
@@ -39,11 +39,6 @@ type ValidKey = ValidKey of string
             List.concat [['a'..'z'];['A'..'Z']]
         static member Remaining =
             List.concat [ValidKey.Openers;['0'..'9']]
-
-type TemplateSituation =
-    { Model : IDict<string, string>
-      Template : string
-      Expected : string }
 
 type Generators() =
     static member KeyValuePairSeq() : Arbitrary<KVP<string, string> seq> =
@@ -72,39 +67,6 @@ type Generators() =
             return allChars |> String |> ValidKey
         } |> Arb.fromGen
 
-    static member TemplateSituation() : Arbitrary<TemplateSituation> =
-        gen {
-            let! (modelData : KVP<string, string> seq) = Arb.generate
-            let model = Dict(modelData)
-            let taglessSection =
-                gen {
-                    let! (ts : TaglessString) = Arb.generate
-                    return ts.Value, ts.Value
-                }
-            let taggedSection =
-                gen {
-                    if Seq.isEmpty modelData then
-                        return "", ""
-                    else
-                        let! kv = Gen.elements modelData
-                        return "{{" + kv.Key + "}}", kv.Value
-                }
-            let! sections =
-                Gen.listOf (Gen.oneof [taglessSection;taggedSection])
-            let before =
-                sections
-                |> List.map fst
-                |> String.concat ""
-            let after =
-                sections
-                |> List.map snd
-                |> String.concat ""
-            return
-                { Model = model
-                  Template = before
-                  Expected = after }
-        } |> Arb.fromGen
-
 let checkConfig =
     { FsCheckConfig.defaultConfig with arbitrary = [typeof<Generators>] }
 
@@ -125,12 +87,4 @@ let tests =
                 | Error err ->
                     false |@ sprintf "Rendering error: %A" err
 
-        testPropertyWithConfig checkConfig "Tagged string do change" <|
-            fun ts ->
-                let result = renderText ts.Model ts.Template
-                match result with
-                | Ok rendered ->
-                    Expect.equal rendered ts.Expected "Invalid change"
-                | Error err ->
-                    failtestf "Rendering error: %A" err
     ]
