@@ -17,3 +17,4 @@ let imperativeRender (model : #seq<KeyValuePair<string,string>>) (content : stri
     for kv in model do
         let regex = Regex(sprintf """\{\{\s?%s\s?\}\}""" kv.Key)
         result <- regex.Replace(result, kv.Value)
+    result
