@@ -1,10 +1,6 @@
 using System.Collections.Generic;
 using Xunit;
 using static Rendering.Implementation;
-using Result =
-    Microsoft.FSharp.Core.FSharpResult<
-        string,
-        Rendering.Implementation.RenderingError>;
 
 namespace Rendering.CSharp.Tests
 {
@@ -16,7 +12,7 @@ namespace Rendering.CSharp.Tests
             var template = "No tags";
             var model = new Dictionary<string, string>();
             var result = renderText(model, template);
-            Assert.Equal(Result.NewOk(template), result);
+            Assert.Equal(template, result);
         }
 
         [Fact]
@@ -27,7 +23,7 @@ namespace Rendering.CSharp.Tests
                 { "TAG", "REPLACED" }
             };
             var result = renderText(model, template);
-            Assert.Equal(Result.NewOk("a REPLACED"), result);
+            Assert.Equal("a REPLACED", result);
         }
     }
 }
